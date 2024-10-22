@@ -134,7 +134,11 @@ func (ec *Client) getBlock(ctx context.Context, method string, args ...interface
 
 	// Decode header and transactions.
 	var head *types.Header
+	var body rpcBlock
 	if err := json.Unmarshal(raw, &head); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, err
 	}
 	// When the block is not found, the API returns JSON null.
@@ -142,10 +146,6 @@ func (ec *Client) getBlock(ctx context.Context, method string, args ...interface
 		return nil, ethereum.NotFound
 	}
 
-	var body rpcBlock
-	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, err
-	}
 	// Quick-verify transaction and uncle lists. This mostly helps with debugging the server.
 	if head.UncleHash == types.EmptyUncleHash && len(body.UncleHashes) > 0 {
 		return nil, errors.New("server returned non-empty uncle list but block header indicates no uncles")
@@ -184,20 +184,23 @@ func (ec *Client) getBlock(ctx context.Context, method string, args ...interface
 		}
 	}
 	// Fill the sender cache of transactions in the block.
-	txs := make([]*types.Transaction, len(body.Transactions))
-	for i, tx := range body.Transactions {
+	txs := make([]*types.Transaction, 0, len(body.Transactions))
+	for _, tx := range body.Transactions {
+		if tx.tx == nil {
+			// Skip unsupported transaction types
+			continue
+		}
 		if tx.From != nil {
 			setSenderFromServer(tx.tx, *tx.From, body.Hash)
 		}
-		txs[i] = tx.tx
+		txs = append(txs, tx.tx)
 	}
 
-	return types.NewBlockWithHeader(head).WithBody(
-		types.Body{
-			Transactions: txs,
-			Uncles:       uncles,
-			Withdrawals:  body.Withdrawals,
-		}), nil
+	return types.NewBlockWithHeader(head).WithBody(types.Body{
+		Transactions: txs,
+		Uncles:       uncles,
+		Withdrawals:  body.Withdrawals,
+	}), nil
 }
 
 // HeaderByHash returns the block header with the given hash.
@@ -731,3 +734,4 @@ func (p *rpcProgress) toSyncProgress() *ethereum.SyncProgress {
 		TxIndexRemainingBlocks: uint64(p.TxIndexRemainingBlocks),
 	}
 }
+
